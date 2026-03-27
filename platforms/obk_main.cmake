@@ -81,6 +81,7 @@ set(OBKM_SRC
 	${OBK_SRCS}driver/drv_dht_internal.c
 	${OBK_SRCS}driver/drv_dht.c
 	${OBK_SRCS}driver/drv_drawers.c
+	${OBK_SRCS}driver/drv_dreo.c
 	${OBK_SRCS}driver/drv_doorSensorWithDeepSleep.c
 	${OBK_SRCS}driver/drv_ds1820_common.c
 	${OBK_SRCS}driver/drv_ds1820_simple.c
