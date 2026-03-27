@@ -3,17 +3,20 @@
 // Tiny differences from TuyaMCU: header + seq byte + checksum formula
 
 #include "../new_common.h"
+#include "../new_pins.h"
+#include "../new_cfg.h"
+#include "../logging/logging.h"
 #include "drv_public.h"
 #include "drv_uart.h"
-#include "drv_tuyaMCU.h"   // reuse DP parser and helpers
+#include "drv_tuyaMCU.h"   // reuse DP parser, DP_TYPE_*, TuyaMCU_ParseStateMessage
 
-#define LOG_FEATURE_TUYAMCU LOG_FEATURE_DREO   // reuse the same log tag or change it
+#define LOG_FEATURE LOG_FEATURE_TUYAMCU   // reuse the same log tag (cleanest)
 
 static uint8_t g_dreoSeq = 0;           // rolling sequence counter
 static bool g_dreoInitialised = false;
 
 // ------------------------------------------------------------------
-// Packet detection (replaces UART_TryToGetNextTuyaPacket)
+// Packet detection
 // ------------------------------------------------------------------
 int Dreo_TryToGetNextPacket(byte* out, int maxSize) {
     int cs = UART_GetDataSize();
@@ -28,14 +31,14 @@ int Dreo_TryToGetNextPacket(byte* out, int maxSize) {
     if (cs < 9) return 0;
 
     // header: 55 AA 00 seq cmd 00 00 len_lo
-    uint16_t payloadLen = UART_GetByte(7);          // len is only 1 byte in practice
-    uint16_t packetLen = 8 + payloadLen + 1;        // 8 header + payload + checksum
+    uint16_t payloadLen = UART_GetByte(7);
+    uint16_t packetLen = 8 + payloadLen + 1;
 
     if (cs < packetLen) return 0;                   // not full frame yet
 
     // copy whole packet
     if (packetLen > maxSize) {
-        addLogAdv(LOG_INFO, LOG_FEATURE_DREO, "Dreo packet too big (%d > %d)\n", packetLen, maxSize);
+        addLogAdv(LOG_INFO, LOG_FEATURE, "Dreo packet too big (%d > %d)\n", packetLen, maxSize);
         UART_ConsumeBytes(packetLen);
         return 0;
     }
@@ -66,11 +69,11 @@ static void Dreo_ProcessPacket(const byte* data, int len) {
 
     // verify checksum
     if (Dreo_CalcChecksum(data, len) != data[len - 1]) {
-        addLogAdv(LOG_INFO, LOG_FEATURE_DREO, "Bad Dreo checksum\n");
+        addLogAdv(LOG_INFO, LOG_FEATURE, "Bad Dreo checksum\n");
         return;
     }
 
-    addLogAdv(LOG_INFO, LOG_FEATURE_DREO, "Dreo cmd=0x%02X seq=0x%02X payloadLen=%d\n",
+    addLogAdv(LOG_INFO, LOG_FEATURE, "Dreo cmd=0x%02X seq=0x%02X payloadLen=%d\n",
               cmd, data[3], payloadLen);
 
     switch (cmd) {
@@ -117,7 +120,7 @@ void Dreo_SendRaw(uint8_t cmd, const uint8_t* payload, size_t payloadLen) {
 }
 
 // ------------------------------------------------------------------
-// Send a single DP (exactly like TuyaMCU_SendState but via Dreo frame)
+// Send a single DP
 // ------------------------------------------------------------------
 void Dreo_SendDP(uint8_t dpId, uint8_t type, const void* value, int dataLen) {
     uint8_t buf[64];
@@ -138,7 +141,7 @@ void Dreo_SendDP(uint8_t dpId, uint8_t type, const void* value, int dataLen) {
 }
 
 // ------------------------------------------------------------------
-// Convenience wrappers (power, mode, target temp, etc.)
+// Convenience wrappers
 // ------------------------------------------------------------------
 void Dreo_SetPower(bool on) {
     uint8_t v = on ? 1 : 0;
@@ -149,9 +152,8 @@ void Dreo_SetMode(uint8_t mode) {          // 1=manual/Hx, 2=eco, 3=fan-only (fr
     Dreo_SendDP(2, DP_TYPE_ENUM, &mode, 1);
 }
 
-void Dreo_SetTargetTemp(float celsius) {
-    uint8_t v = (uint8_t)celsius;          // byte value, same scaling as ESPHome
-    Dreo_SendDP(4, DP_TYPE_VALUE, &v, 1);
+void Dreo_SetTargetTemp(uint8_t celsius) { // byte value, same scaling as ESPHome
+    Dreo_SendDP(4, DP_TYPE_VALUE, &celsius, 1);
 }
 
 // ... add more as needed (sound=DP06, display=DP08, childlock=DP16, etc.)
@@ -160,7 +162,7 @@ void Dreo_SetTargetTemp(float celsius) {
 // Driver init / main loop
 // ------------------------------------------------------------------
 void Dreo_Init() {
-    addLogAdv(LOG_INFO, LOG_FEATURE_DREO, "Dreo MCU driver started\n");
+    addLogAdv(LOG_INFO, LOG_FEATURE, "Dreo MCU driver started\n");
 
     // same init sequence as ESPHome
     Dreo_SendRaw(0x00, NULL, 0);
@@ -177,9 +179,9 @@ void Dreo_OnEverySecond() {
     if (!g_dreoInitialised) return;
 
     static uint32_t lastHb = 0;
-    if (TimeSinceStartup() - lastHb > 10) {     // 10 s heartbeat
+    if (g_secondsElapsed - lastHb > 10) {     // 10 s heartbeat
         Dreo_SendRaw(0x00, NULL, 0);
-        lastHb = TimeSinceStartup();
+        lastHb = g_secondsElapsed;
     }
 }
 
@@ -194,7 +196,9 @@ void Dreo_OnUartRx() {
     }
 }
 
+// ------------------------------------------------------------------
 // Register the driver (add this to drv_main.c or use the online builder)
+// ------------------------------------------------------------------
 void DRV_DREO_Init() {
     DRV_RegisterDriver("Dreo", Dreo_OnUartRx, Dreo_OnEverySecond);
     // optional: add command handlers, e.g. "dreoPower 1", "dreoTemp 25" etc.
